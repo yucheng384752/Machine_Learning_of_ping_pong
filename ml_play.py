@@ -31,7 +31,7 @@ class DQN(nn.Module):
         return self.net(x)
 
 
-def load_trained_model(env: PongEnv, model_path: str = "dqn_pong_best.pt") -> DQN:
+def load_trained_model(env: PongEnv, model_path: str = "models\\dqn_pong_best.pt") -> DQN:
     """載入訓練好的 DQN 模型（如果失敗則嘗試載入 dqn_pong_last.pt）。"""
     state_dim = env.reset().shape[0]
     action_dim = env.action_space_n

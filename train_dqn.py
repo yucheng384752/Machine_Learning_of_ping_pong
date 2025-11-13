@@ -161,7 +161,7 @@ def train():
         # 簡單儲存最佳模型
         if episode_reward > best_avg_reward:
             best_avg_reward = episode_reward
-            torch.save(policy_net.state_dict(), "dqn_pong_best.pt")
+            torch.save(policy_net.state_dict(), "models\\dqn_pong_best.pt")
 
     # 訓練結束，儲存最後一版
     torch.save(policy_net.state_dict(), "dqn_pong_last.pt")

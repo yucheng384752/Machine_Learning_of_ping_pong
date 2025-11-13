@@ -16,7 +16,7 @@ BLACK = (0, 0, 0)
 PADDLE_W, PADDLE_H = 4, 20
 BALL_SIZE = 3
 PADDLE_SPEED = 2
-BALL_SPEED = 1.5
+BALL_SPEED = 1.2
 
 
 def main():
