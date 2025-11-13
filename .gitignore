@@ -2,10 +2,21 @@
 __pycache__/
 *.pyc
 
-# venv
+# Virtual environment
 .venv/
 env/
 
-# 模型檔
+# IDE settings
+.vscode/
+.idea/
+
+# ML model outputs
 *.pt
 
+# uv / pip
+uv.lock
+pip-lock.json
+
+# OS files
+.DS_Store
+Thumbs.db
