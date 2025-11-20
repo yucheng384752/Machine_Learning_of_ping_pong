@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 
 from train_dqn import DQN
-from env_paia import PongEnvPAIA   # ✅ 使用 PAIA 版環境
+from env_paia import PongEnvPAIA   # 使用 PAIA 版環境
 
 
 def load_trained_model(env: PongEnvPAIA, device: torch.device, model_path: str):

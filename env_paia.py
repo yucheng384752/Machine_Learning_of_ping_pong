@@ -1,4 +1,10 @@
-# env_paia.py
+# v0.3.0
+# Changelog:
+# - 加入 speed_level（球速等級），隨著時間加速累加，並加入 state
+# - 加入預測落點 landing_x_norm，預測球到達 1P y 時的 x 位置並加入 state
+# - 在球往下飛時，根據球與 1P 距離做「提前跑位」的 reward shaping
+# - 保留原本 lose 時的 miss_dx_norm 額外懲罰
+
 import random
 from typing import Tuple, Dict, Any, Optional
 
@@ -19,15 +25,20 @@ class PongEnvPAIA:
         3 = 發球向左
         4 = 發球向右
 
-    - 狀態空間（10 維 float32）：
-        [bx, by, bvx, bvy, p1x, p2x, ball_attached, we_serving, ox, oy]
+    - 狀態空間（12 維 float32）：
+        [bx, by, bvx, bvy, p1x, p2x,
+         ball_attached, we_serving, ox, oy,
+         speed_level_norm, landing_x_norm]
+
       其中：
         bx, by: 球中心座標 / 場地尺寸 → [0,1]
         bvx, bvy: 球速度 / max_ball_speed 映射到 [0,1]
         p1x, p2x: 板子中心 x / 場地寬度 → [0,1]
         ball_attached: 1=球還沒發出、貼在發球方板子上；0=球在飛
-        we_serving: 1=輪到 1P 發球；0=輪到 2P 發球（目前訓練中可都讓 1P 發）
+        we_serving: 1=輪到 1P 發球；0=輪到 2P 發球
         ox, oy: 障礙物中心座標 / 場地尺寸（easy 模式為 0）
+        speed_level_norm: 球速等級 / 10，約在 [0,1]
+        landing_x_norm: 預測球到達 1P 板子 y 時的 x / W（0~1）
     """
 
     def __init__(
@@ -93,6 +104,9 @@ class PongEnvPAIA:
         self.frames_since_serve_prompt = 0
         self.frames_since_serve = 0    # 球發出後經過的 frame，用來加速
 
+        # 球速等級（每加速一次 +1）
+        self.speed_level = 0
+
         # 障礙物（hard mode）
         self.obstacle_w = 30
         self.obstacle_h = 20
@@ -131,6 +145,7 @@ class PongEnvPAIA:
         self.ball_in_play = False
         self.frames_since_serve_prompt = 0
         self.frames_since_serve = 0
+        self.speed_level = 0
 
         self._attach_ball_to_server()
 
@@ -175,6 +190,14 @@ class PongEnvPAIA:
         if self.use_obstacle:
             self._update_obstacle()
 
+        # 4.5 提前跑位 reward shaping（球往 1P 飛時，越靠近球越好）
+        if self.ball_in_play and self.ball_vy > 0:
+            ball_cx = self.ball_x + self.BALL_SIZE / 2
+            p1_cx = self.p1_x + self.PADDLE_W / 2
+            dx_norm = abs(ball_cx - p1_cx) / self.W
+            # 每步小懲罰，鼓勵板子慢慢對齊球
+            reward -= 0.02 * dx_norm
+
         # 5. 依結果加上 win/lose 的獎勵
         if result == "win":
             reward += self.win_reward
@@ -189,14 +212,13 @@ class PongEnvPAIA:
             p1_cx = self.p1_x + self.PADDLE_W / 2
 
             dx_norm = abs(ball_cx - p1_cx) / self.W  # 0~1，左右對稱
-            extra_penalty = 1.0 * dx_norm             # 這個 1.0 可以調大調小
+            extra_penalty = 1.5 * dx_norm             # 這個 1.0 可以調大調小
 
             reward -= extra_penalty
 
             self.done = True
             info["result"] = "lose"
             info["miss_dx_norm"] = dx_norm  # 想 debug 可以順便存起來
-
 
         # 6. 時間結束條件（timeout）
         if self.steps >= self.max_steps and not self.done:
@@ -245,6 +267,7 @@ class PongEnvPAIA:
         self.ball_in_play = True
         self.frames_since_serve_prompt = 0
         self.frames_since_serve = 0
+        self.speed_level = 0
 
     def _update_player1(self, action: int):
         """
@@ -286,7 +309,6 @@ class PongEnvPAIA:
         """
         old_x = self.p2_x
 
-        # 若球還沒發出，就追著中線或球的 x
         target_x = self.ball_x
         center_x = self.p2_x + self.PADDLE_W / 2
 
@@ -307,8 +329,11 @@ class PongEnvPAIA:
 
     def _increase_ball_speed_if_needed(self):
         """
-        每隔一定步數增加球速（保持方向不變，只放大向量長度）。
+        每隔一定步數增加球速（保持方向不變，只放大向量長度），並更新 speed_level。
         """
+        if not self.ball_in_play:
+            return
+
         self.frames_since_serve += 1
 
         if (
@@ -320,6 +345,8 @@ class PongEnvPAIA:
             if speed <= 1e-6:
                 return
             new_speed = min(self.max_ball_speed, speed + 1.0)
+            if new_speed > speed + 1e-6:
+                self.speed_level += 1
             scale = new_speed / speed
             self.ball_vx *= scale
             self.ball_vy *= scale
@@ -364,10 +391,8 @@ class PongEnvPAIA:
 
         # 4. 上下邊界保護（理論上應該在出界前被 paddle 接到或 miss）
         if ball_top < 0:
-            # 先不要立刻反彈，交由出界判定處理
             pass
         if ball_bottom > self.H:
-            # 同上
             pass
 
         # 5. 撞到 1P 板子（在下面）
@@ -488,12 +513,52 @@ class PongEnvPAIA:
 
             # 速度大小維持不變（只改方向）
 
+    # ----------- 預測落點 -----------
+
+    def _predict_landing_x_norm(self) -> float:
+        """
+        粗略預測球到達 1P 板子 y 時的 x 位置，忽略板子與障礙物，只考慮牆壁反彈。
+        回傳 0~1 之間的值。
+        """
+        # 球未發出或球不是往下飛，就用當前球 x
+        ball_cx = self.ball_x + self.BALL_SIZE / 2
+        if (not self.ball_in_play) or self.ball_vy <= 0:
+            return ball_cx / self.W
+
+        x = ball_cx
+        y = self.ball_y + self.BALL_SIZE / 2
+        vx = self.ball_vx
+        vy = self.ball_vy
+
+        target_y = self.p1_y  # 1P 板子頂部附近
+        max_iter = 2000
+
+        for _ in range(max_iter):
+            if y >= target_y:
+                break
+
+            x += vx
+            y += vy
+
+            # 左右牆反彈
+            if x <= 0:
+                x = 0
+                vx = abs(vx)
+            elif x >= self.W:
+                x = self.W
+                vx = -abs(vx)
+
+        x = max(0.0, min(self.W, x))
+        return x / self.W
+
     # ----------- state 編碼 -----------
 
     def _get_state(self) -> np.ndarray:
         """
-        將當前遊戲狀態轉為 10 維連續向量：
-        [bx, by, bvx, bvy, p1x, p2x, ball_attached, we_serving, ox, oy]
+        將當前遊戲狀態轉為 12 維連續向量：
+        [bx, by, bvx, bvy, p1x, p2x,
+         ball_attached, we_serving, ox, oy,
+         speed_level_norm, landing_x_norm]
         """
         # 球中心
         ball_cx = self.ball_x + self.BALL_SIZE / 2
@@ -527,8 +592,18 @@ class PongEnvPAIA:
             ox = 0.0
             oy = 0.0
 
+        # 球速等級（假設最高到 10 級，做 clip）
+        speed_level_norm = min(self.speed_level / 10.0, 1.0)
+
+        # 預測落點
+        landing_x_norm = self._predict_landing_x_norm()
+
         state = np.array(
-            [bx, by, bvx, bvy, p1x, p2x, ball_attached, we_serving, ox, oy],
+            [
+                bx, by, bvx, bvy, p1x, p2x,
+                ball_attached, we_serving, ox, oy,
+                speed_level_norm, landing_x_norm,
+            ],
             dtype=np.float32,
         )
         return state

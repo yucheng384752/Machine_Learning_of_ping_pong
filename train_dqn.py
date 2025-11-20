@@ -1,9 +1,17 @@
-# v0.2.0
+# v0.4.0
 # Changelog:
-# - 加入左右鏡射 data augmentation：
-#   - state: bx, p1x, p2x, ox 做 x 軸鏡射；bvx 取 1 - bvx（對應水平速度反向）
-#   - action: 左/右移動、左/右發球互換
-# - 訓練時每筆 sample 會同時使用原始 + 鏡射版本，讓 agent 學到左右對稱策略
+# - 加入訓練過程紀錄：
+#   - 每一集的 episode_reward
+#   - 每一集的平均 loss
+#   - 每一集的平均 max Q
+#   - 每一集 policy_net 參數的 L2 norm（||θ||₂）
+# - 訓練結束後會將紀錄存成 training_logs.pth，供後續畫圖使用
+#
+# 保留：
+# - PAIA 版環境 env_paia.PongEnvPAIA
+# - Double DQN 更新方式
+# - 左右鏡射的 data augmentation
+# - epsilon 以步數線性衰減 (50_000 steps)
 
 import os
 import random
@@ -59,20 +67,22 @@ def mirror_state(state: np.ndarray) -> np.ndarray:
     """
     對 PAIA state 做左右鏡射。
 
-    state 結構（長度 10）：
-    [0] bx          球 x（0~1）
-    [1] by          球 y（0~1）
-    [2] bvx         球 vx 正規化後（0~1，0.5=0，>0.5=向右）
-    [3] bvy         球 vy 正規化後
-    [4] p1x         1P 板子中心 x（0~1）
-    [5] p2x         2P 板子中心 x（0~1）
+    state 結構（長度 12）：
+    [0] bx              球 x（0~1）
+    [1] by              球 y（0~1）
+    [2] bvx             球 vx 正規化後（0~1，0.5=0，>0.5=向右）
+    [3] bvy             球 vy 正規化後
+    [4] p1x             1P 板子中心 x（0~1）
+    [5] p2x             2P 板子中心 x（0~1）
     [6] ball_attached
     [7] we_serving
-    [8] ox          障礙物 x（0~1）
-    [9] oy          障礙物 y（0~1）
+    [8] ox              障礙物 x（0~1）
+    [9] oy              障礙物 y（0~1）
+    [10] speed_level    球速等級正規化（0~1）
+    [11] landing_x      預測落點 x（0~1）
 
     左右鏡射意義：
-    - x 相關：bx, p1x, p2x, ox → 1 - 原本值
+    - x 相關：bx, p1x, p2x, ox, landing_x → 1 - 原本值
     - 水平速度：vx → -vx；對應到正規化後的 bvx 就是 1 - bvx
     - 其他維度不變
     """
@@ -94,6 +104,11 @@ def mirror_state(state: np.ndarray) -> np.ndarray:
     # ox, oy：x 鏡射、y 不變
     mirrored[8] = 1.0 - state[8]
     # mirrored[9] = state[9]
+
+    # speed_level 不變: mirrored[10]
+
+    # landing_x 鏡射
+    mirrored[11] = 1.0 - state[11]
 
     return mirrored
 
@@ -131,7 +146,7 @@ def train():
 
     # ----------- 建立環境（PAIA 版）-----------
     env = PongEnvPAIA(
-        mode="easy",          # 先訓練簡單版，有需要再改 "hard"
+        mode="hard",          # 要練 hard 模式就改這裡；easy 就改成 "easy"
         max_steps=1000,
         time_penalty=-0.005,
         hit_reward=0.5,
@@ -140,7 +155,7 @@ def train():
     )
 
     init_state = env.reset()
-    state_dim = init_state.shape[0]   # 10
+    state_dim = init_state.shape[0]   # 12
     action_dim = env.action_space_n   # 5
 
     # ----------- 裝置（GPU / CPU） -----------
@@ -172,7 +187,7 @@ def train():
     epsilon_decay_steps = 50_000  # 步數越大，衰減越慢
 
     target_update_every = 1_000   # 每多少 steps 更新一次 target_net
-    max_episodes = 500
+    max_episodes = 1000
 
     total_steps = 0
     best_episode_reward = -1e9
@@ -180,10 +195,21 @@ def train():
     print(f"State dim = {state_dim}, Action dim = {action_dim}")
     print(f"Max episodes = {max_episodes}")
 
+    # ----------- 訓練過程紀錄用 ----------- 
+    episode_indices: List[int] = []
+    episode_rewards_log: List[float] = []
+    episode_losses_log: List[float] = []       # 每集平均 loss
+    episode_avgmaxq_log: List[float] = []      # 每集平均 max Q
+    episode_theta_norm_log: List[float] = []   # 每集 ||θ||₂
+
     # ----------- 訓練迴圈 ----------- 
     for episode in range(1, max_episodes + 1):
         state = env.reset()
         episode_reward = 0.0
+
+        # 這一集內用來計算平均的容器
+        losses_this_ep: List[float] = []
+        maxq_this_ep: List[float] = []
 
         while True:
             # 線性衰減 epsilon
@@ -246,18 +272,34 @@ def train():
                 dones_t = torch.from_numpy(dones_arr).unsqueeze(1).to(device)
 
                 # Q(s, a) from policy_net
-                q_values = policy_net(states_t).gather(1, actions_t)
+                all_q_values = policy_net(states_t)
+                q_values = all_q_values.gather(1, actions_t)
 
-                # target: r + gamma * max_a' Q_target(s', a')
+                # 這一個 batch 的平均 max Q（用來畫 Q-value 變化）
                 with torch.no_grad():
-                    max_next_q = target_net(next_states_t).max(dim=1, keepdim=True)[0]
-                    target_q = rewards_t + gamma * (1.0 - dones_t) * max_next_q
+                    batch_max_q = all_q_values.max(dim=1)[0].mean().item()
+
+                # --------- Double DQN target 計算 ---------
+                with torch.no_grad():
+                    # 用 policy_net 在 next_state 上選動作（argmax）
+                    next_q_policy = policy_net(next_states_t)
+                    best_actions = next_q_policy.argmax(dim=1, keepdim=True)
+
+                    # 用 target_net 估計這些動作的 Q 值
+                    next_q_target = target_net(next_states_t).gather(1, best_actions)
+
+                    # target: r + gamma * max_a' Q_target(s', a*)
+                    target_q = rewards_t + gamma * (1.0 - dones_t) * next_q_target
 
                 loss = criterion(q_values, target_q)
 
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
+
+                # 紀錄這個 batch 的 loss / maxQ
+                losses_this_ep.append(loss.item())
+                maxq_this_ep.append(batch_max_q)
 
             # 5. 定期更新 target network（student → teacher）
             if total_steps % target_update_every == 0:
@@ -266,12 +308,38 @@ def train():
             if done:
                 break
 
-        # ----------- episode 結束，印出結果 ----------- 
+        # ----------- episode 結束，統計並紀錄 ----------- 
+        episode_indices.append(episode)
+        episode_rewards_log.append(episode_reward)
+
+        mean_loss = (
+            float(sum(losses_this_ep)) / len(losses_this_ep)
+            if losses_this_ep else 0.0
+        )
+        episode_losses_log.append(mean_loss)
+
+        mean_maxq = (
+            float(sum(maxq_this_ep)) / len(maxq_this_ep)
+            if maxq_this_ep else 0.0
+        )
+        episode_avgmaxq_log.append(mean_maxq)
+
+        # θ 的 L2 norm
+        with torch.no_grad():
+            sq_sum = 0.0
+            for p in policy_net.parameters():
+                sq_sum += p.data.pow(2).sum().item()
+            theta_norm = sq_sum ** 0.5
+        episode_theta_norm_log.append(theta_norm)
+
+        # 印出結果
         print(
             f"[Episode {episode:4d}] "
             f"steps = {total_steps:6d} | "
             f"reward = {episode_reward:7.3f} | "
-            f"epsilon = {epsilon:5.3f}"
+            f"epsilon = {epsilon:5.3f} | "
+            f"mean_loss = {mean_loss:7.4f} | "
+            f"avg_maxQ = {mean_maxq:7.4f}"
         )
 
         # 儲存「單集 reward 最佳」的模型
@@ -279,9 +347,20 @@ def train():
             best_episode_reward = episode_reward
             torch.save(policy_net.state_dict(), "models/dqn_pong_best.pt")
 
-    # 訓練結束，儲存最後一版
+    # 訓練結束，儲存最後一版模型
     torch.save(policy_net.state_dict(), "models/dqn_pong_last.pt")
     print("Training finished. Models saved as models/dqn_pong_best.pt and models/dqn_pong_last.pt")
+
+    # ----------- 存下訓練曲線資料，供後續畫圖 ----------- 
+    log_data = {
+        "episodes": episode_indices,
+        "episode_rewards": episode_rewards_log,
+        "episode_losses": episode_losses_log,
+        "episode_avgmaxq": episode_avgmaxq_log,
+        "episode_theta_norm": episode_theta_norm_log,
+    }
+    torch.save(log_data, "training_logs.pth")
+    print("Training logs saved to training_logs.pth")
 
 
 if __name__ == "__main__":
