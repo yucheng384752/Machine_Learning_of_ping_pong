@@ -180,10 +180,23 @@ class PongEnvPAIA:
             reward += self.win_reward
             self.done = True
             info["result"] = "win"
+
         elif result == "lose":
             reward += self.lose_penalty
+
+            # 額外：根據掉球當下，球與 1P 板子的水平距離，再多扣一些
+            ball_cx = self.ball_x + self.BALL_SIZE / 2
+            p1_cx = self.p1_x + self.PADDLE_W / 2
+
+            dx_norm = abs(ball_cx - p1_cx) / self.W  # 0~1，左右對稱
+            extra_penalty = 1.0 * dx_norm             # 這個 1.0 可以調大調小
+
+            reward -= extra_penalty
+
             self.done = True
             info["result"] = "lose"
+            info["miss_dx_norm"] = dx_norm  # 想 debug 可以順便存起來
+
 
         # 6. 時間結束條件（timeout）
         if self.steps >= self.max_steps and not self.done:
@@ -315,8 +328,8 @@ class PongEnvPAIA:
         """
         更新球位置、處理邊界碰撞、板子碰撞、得分判定。
         回傳：
-          - reward_delta: 這一步因為擊球等產生的額外獎勵
-          - result: None / "win" / "lose"
+        - reward_delta: 這一步因為擊球等產生的額外獎勵
+        - result: None / "win" / "lose"
         """
         if not self.ball_in_play:
             return 0.0, None
@@ -337,7 +350,19 @@ class PongEnvPAIA:
         ball_top = self.ball_y
         ball_bottom = self.ball_y + self.BALL_SIZE
 
-        # 3. 上下邊界保護（理論上應該在出界前被 paddle 接到或 miss）
+        # 3. 左右牆壁反彈
+        if ball_left <= 0:
+            self.ball_x = 0
+            self.ball_vx = abs(self.ball_vx)  # 往右彈
+            ball_left = self.ball_x
+            ball_right = self.ball_x + self.BALL_SIZE
+        elif ball_right >= self.W:
+            self.ball_x = self.W - self.BALL_SIZE
+            self.ball_vx = -abs(self.ball_vx)  # 往左彈
+            ball_left = self.ball_x
+            ball_right = self.ball_x + self.BALL_SIZE
+
+        # 4. 上下邊界保護（理論上應該在出界前被 paddle 接到或 miss）
         if ball_top < 0:
             # 先不要立刻反彈，交由出界判定處理
             pass
@@ -345,7 +370,7 @@ class PongEnvPAIA:
             # 同上
             pass
 
-        # 4. 撞到 1P 板子（在下面）
+        # 5. 撞到 1P 板子（在下面）
         p1_top = self.p1_y
         p1_bottom = self.p1_y + self.PADDLE_H
         p1_left = self.p1_x
@@ -358,35 +383,29 @@ class PongEnvPAIA:
             and ball_left <= p1_right
             and self.ball_vy > 0  # 球往下飛才有可能被 1P 擋到
         ):
-            # 推到板子上方
             self.ball_y = p1_top - self.BALL_SIZE
             ball_bottom = self.ball_y + self.BALL_SIZE
 
-            # 垂直反彈
             self.ball_vy = -abs(self.ball_vy)
 
-            # 簡化版「切球」：根據 1P 水平移動方向調整 vx
+            # 簡化版切球
             move_dir = self.p1_move_dir  # -1,0,1
             if move_dir != 0:
                 if self.ball_vx == 0.0:
-                    # 原本沒有水平速度，直接給一點
                     self.ball_vx = move_dir * self.initial_speed
                 else:
                     sign_vx = 1.0 if self.ball_vx > 0 else -1.0
                     if move_dir == sign_vx:
-                        # 同方向：加快水平速度
                         new_mag = min(
                             self.max_ball_speed, abs(self.ball_vx) + 3.0
                         )
                         self.ball_vx = sign_vx * new_mag
                     else:
-                        # 相反方向：反轉水平速度
                         self.ball_vx = -self.ball_vx
 
-            # 擊球獎勵
             reward_delta += self.hit_reward
 
-        # 5. 撞到 2P 板子（在上面）
+        # 6. 撞到 2P 板子（在上面）
         p2_top = self.p2_y
         p2_bottom = self.p2_y + self.PADDLE_H
         p2_left = self.p2_x
@@ -399,22 +418,15 @@ class PongEnvPAIA:
             and ball_left <= p2_right
             and self.ball_vy < 0  # 球往上飛
         ):
-            # 推到板子下方
             self.ball_y = p2_bottom
             ball_top = self.ball_y
-
-            # 垂直反彈
             self.ball_vy = abs(self.ball_vy)
 
-        # 6. 出界判定：上界 or 下界
-        #   - 球超出上邊界：我方得分（win）
-        #   - 球超出下邊界：我方失分（lose）
+        # 7. 出界判定（上下出界）
         if ball_bottom < 0:
-            # 完全從上方飛出去（對方 miss）
             result = "win"
             self.ball_in_play = False
         elif ball_top > self.H:
-            # 完全從下方飛出去（我方 miss）
             result = "lose"
             self.ball_in_play = False
 
