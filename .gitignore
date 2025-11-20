@@ -20,3 +20,11 @@ pip-lock.json
 # OS files
 .DS_Store
 Thumbs.db
+python-version
+
+# files
+test_gpu_torch.pyc
+*.zip
+*.toml
+*.pth
+*.png
