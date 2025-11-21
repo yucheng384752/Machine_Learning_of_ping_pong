@@ -47,13 +47,13 @@ class PongEnvPAIA:
         max_steps: int = 1000,
         time_penalty: float = -0.005,
         hit_reward: float = 0.5,
-        win_reward: float = 2.0,
+        win_reward: float = 2.5,
         lose_penalty: float = -2.0,
         max_ball_speed: float = 20.0,  # 用來做速度正規化與封頂
         seed: Optional[int] = None,
         fast_speed_level=2,        # 從幾級球速開始算「快」
-        fast_hit_bonus=0.3,        # 高速接到球的額外獎勵
-        fast_win_bonus=0.5,        # 高速時得分 bonus
+        fast_hit_bonus=0.4,        # 高速接到球的額外獎勵
+        fast_win_bonus=0.8,        # 高速時得分 bonus
     ):
         self.mode = mode
         self.use_obstacle = (mode == "hard")
@@ -63,7 +63,7 @@ class PongEnvPAIA:
 
         # 板子設定
         self.PADDLE_W, self.PADDLE_H = 40, 10
-        self.PADDLE_SPEED = 5
+        self.PADDLE_SPEED = 7
 
         # 球設定
         self.BALL_SIZE = 10
@@ -121,6 +121,24 @@ class PongEnvPAIA:
         self.fast_speed_level = fast_speed_level
         self.fast_hit_bonus = fast_hit_bonus
         self.fast_win_bonus = fast_win_bonus
+        
+        # ==========================
+        # 2P AI 難度設定
+        # ==========================
+        if mode == "easy":
+            self.p2_speed = 4          # 2P 每步最大移動速度
+            self.p2_reaction_delay = 5 # 每 5 frame 才反應一次
+            self.p2_anticipation = 3   # 提前預測量（越大越強）
+        elif mode == "hard":
+            self.p2_speed = 7
+            self.p2_reaction_delay = 1
+            self.p2_anticipation = 6
+        else:  # normal
+            self.p2_speed = 6
+            self.p2_reaction_delay = 3
+            self.p2_anticipation = 4
+
+        self._p2_react_counter = 0
 
     # ----------- 公開 API -----------
 
@@ -216,7 +234,7 @@ class PongEnvPAIA:
             # 基礎得分獎勵
             reward += self.win_reward
 
-            # 🔹 高速球 bonus：速度越高，額外加分越多
+            # 高速球 bonus：速度越高，額外加分越多
             if is_fast:
                 speed_factor = (speed_level - self.fast_speed_level + 1)
                 reward += self.fast_win_bonus * speed_factor
@@ -331,29 +349,59 @@ class PongEnvPAIA:
                     direction = self._rng.choice(["left", "right"])
                     self._serve_ball(direction)
 
-    def _update_player2(self):
+    def _update_player2(self) -> None:
         """
-        簡單 rule-based AI：追著球的 x。
+        強化版 2P rule-based AI.
+
+        主要邏輯：
+        - 若球往上飛 (ball_vy < 0)，2P 會提前移動到預測落點
+        - 依照 mode 使用不同的速度 / 反應延遲 / 預測量
+        - 若球往下飛或沒開球，2P 回到畫面中央附近
         """
-        old_x = self.p2_x
+        self._p2_react_counter += 1
 
-        target_x = self.ball_x
-        center_x = self.p2_x + self.PADDLE_W / 2
+        # 控制「反應頻率」：每 N frame 才動一次
+        if self._p2_react_counter % self.p2_reaction_delay != 0:
+            return
 
-        if target_x < center_x:
-            self.p2_x -= self.PADDLE_SPEED
-        elif target_x > center_x:
-            self.p2_x += self.PADDLE_SPEED
+        target_x = self.p2_x  # 預設不動
 
-        self.p2_x = max(0, min(self.W - self.PADDLE_W, self.p2_x))
+        # 球往上飛：2P 要防守
+        if self.ball_in_play and self.ball_vy < 0:
+            # 預測球到達 2P y 位置時的大致 X
+            # 估計還要多久碰到 2P（距離 / 速度）
+            dy = (self.p2_y + self.PADDLE_H) - (self.ball_y + self.BALL_SIZE)
+            if self.ball_vy != 0:
+                frames_to_reach = abs(dy / self.ball_vy)
+            else:
+                frames_to_reach = 0
 
-        dx = self.p2_x - old_x
-        if dx < 0:
-            self.p2_move_dir = -1
-        elif dx > 0:
-            self.p2_move_dir = 1
+            # 預測落點 = 目前球 x + vx * (frame 數 + 額外預判)
+            anticipate = self.p2_anticipation
+            predicted_x = self.ball_x + self.ball_vx * (frames_to_reach + anticipate)
+
+            # 把預測落點 clamp 在場地範圍內
+            predicted_x = max(0, min(self.W - self.PADDLE_W, predicted_x))
+
+            target_x = predicted_x
         else:
-            self.p2_move_dir = 0
+            # 球沒往上飛：2P 回到中間等待下一球
+            target_x = (self.W - self.PADDLE_W) / 2
+
+        # 根據 target_x 以「有限速度」移動 2P
+        if target_x > self.p2_x + self.p2_speed:
+            self.p2_x += self.p2_speed
+        elif target_x < self.p2_x - self.p2_speed:
+            self.p2_x -= self.p2_speed
+        else:
+            self.p2_x = target_x
+
+        # 邊界 clamp
+        if self.p2_x < 0:
+            self.p2_x = 0
+        if self.p2_x > self.W - self.PADDLE_W:
+            self.p2_x = self.W - self.PADDLE_W
+
 
     def _increase_ball_speed_if_needed(self):
         """

@@ -214,7 +214,7 @@ def train():
     beta_frames = 100_000
 
     target_update_every = 1_000
-    max_episodes = 1000
+    max_episodes = 800
 
     total_steps = 0
     best_episode_reward = -1e9

@@ -38,7 +38,7 @@ def select_action_greedy(model: nn.Module, state: np.ndarray, device: torch.devi
 
 def main():
     # ✅ 使用 PAIA 版環境；先用 easy 模式
-    env = PongEnvPAIA(mode="hard")
+    env = PongEnvPAIA(mode="easy")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
