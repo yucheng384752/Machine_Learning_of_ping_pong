@@ -51,6 +51,9 @@ class PongEnvPAIA:
         lose_penalty: float = -2.0,
         max_ball_speed: float = 20.0,  # 用來做速度正規化與封頂
         seed: Optional[int] = None,
+        fast_speed_level=2,        # 從幾級球速開始算「快」
+        fast_hit_bonus=0.3,        # 高速接到球的額外獎勵
+        fast_win_bonus=0.5,        # 高速時得分 bonus
     ):
         self.mode = mode
         self.use_obstacle = (mode == "hard")
@@ -113,6 +116,11 @@ class PongEnvPAIA:
         self.obstacle_x = 0
         self.obstacle_y = 240
         self.obstacle_vx = 0.0
+        
+        # 高速參數設定
+        self.fast_speed_level = fast_speed_level
+        self.fast_hit_bonus = fast_hit_bonus
+        self.fast_win_bonus = fast_win_bonus
 
     # ----------- 公開 API -----------
 
@@ -186,6 +194,11 @@ class PongEnvPAIA:
         ball_reward, result = self._update_ball()
         reward += ball_reward
 
+        # 🔹 取得當前速度等級，判斷是否為「高速球」
+        #   假設 self.speed_level 是整數 0,1,2,...
+        speed_level = getattr(self, "speed_level", 0)
+        is_fast = speed_level >= self.fast_speed_level
+
         # 4. hard 模式更新障礙物
         if self.use_obstacle:
             self._update_obstacle()
@@ -200,9 +213,17 @@ class PongEnvPAIA:
 
         # 5. 依結果加上 win/lose 的獎勵
         if result == "win":
+            # 基礎得分獎勵
             reward += self.win_reward
+
+            # 🔹 高速球 bonus：速度越高，額外加分越多
+            if is_fast:
+                speed_factor = (speed_level - self.fast_speed_level + 1)
+                reward += self.fast_win_bonus * speed_factor
+
             self.done = True
             info["result"] = "win"
+            info["speed_level"] = speed_level
 
         elif result == "lose":
             reward += self.lose_penalty
@@ -210,23 +231,30 @@ class PongEnvPAIA:
             # 額外：根據掉球當下，球與 1P 板子的水平距離，再多扣一些
             ball_cx = self.ball_x + self.BALL_SIZE / 2
             p1_cx = self.p1_x + self.PADDLE_W / 2
-
             dx_norm = abs(ball_cx - p1_cx) / self.W  # 0~1，左右對稱
-            extra_penalty = 1.5 * dx_norm             # 這個 1.0 可以調大調小
+            extra_penalty = 1.5 * dx_norm             # 這個係數可以再調整
 
             reward -= extra_penalty
 
+            # 🔹 遇到高速球還漏接：可以再多一點懲罰（可選）
+            if is_fast:
+                speed_factor = (speed_level - self.fast_speed_level + 1)
+                reward -= 0.3 * speed_factor
+
             self.done = True
             info["result"] = "lose"
-            info["miss_dx_norm"] = dx_norm  # 想 debug 可以順便存起來
+            info["miss_dx_norm"] = dx_norm
+            info["speed_level"] = speed_level
 
         # 6. 時間結束條件（timeout）
         if self.steps >= self.max_steps and not self.done:
             self.done = True
             info.setdefault("result", "timeout")
+            info["speed_level"] = speed_level
 
         next_state = self._get_state()
         return next_state, float(reward), self.done, info
+
 
     # ----------- 內部邏輯 -----------
 
