@@ -3,8 +3,8 @@ import torch
 import torch.nn as nn
 import matplotlib.pyplot as plt
 
-from env_paia import PongEnvPAIA
-from train_dqn import DQN  # 用你訓練時的同一個網路結構
+from PAIA.env_paia import PongEnvPAIA
+from PAIA.train_dqn import DQN  # 用你訓練時的同一個網路結構
 
 
 # --------------------------------------------------
