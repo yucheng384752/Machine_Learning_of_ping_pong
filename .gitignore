@@ -27,3 +27,5 @@ test_gpu_torch.pyc
 *.zip
 *.pth
 *.png
+*.npy
+
