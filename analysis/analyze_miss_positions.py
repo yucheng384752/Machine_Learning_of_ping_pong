@@ -2,9 +2,16 @@ import numpy as np
 import torch
 import torch.nn as nn
 import matplotlib.pyplot as plt
+import os
+import sys
 
-from PAIA.env_paia import PongEnvPAIA
-from PAIA.train_dqn import DQN  # 用你訓練時的同一個網路結構
+# 專案根目錄
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+    
+from env_paia import PongEnvPAIA
+from train_dqn import DQN  # 用你訓練時的同一個網路結構
 
 
 # --------------------------------------------------
@@ -115,7 +122,7 @@ def main():
     print("Using device:", device)
 
     # 3. 載入模型
-    model = load_trained_model(env, device, "models/dqn_pong_best.pt")
+    model = load_trained_model(env, device, "C:\\Users\\Yucheng\\Desktop\\Machine_Learning_of_ping_pong\\models\\dqn_pong_last.pt")
 
     # 4. 收集漏球位置
     miss_x_norm = collect_miss_positions(env, model, device, num_episodes=1000)
