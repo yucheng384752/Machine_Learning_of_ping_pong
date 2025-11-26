@@ -1,7 +1,42 @@
 # 專案架構總覽（Breakdown）
 
 本專案是一個「以 DQN 訓練 1P 乒乓球 AI，與 2P 規則型對手對戰」的完整系統，包含環境模擬、強化學習、對手 AI、視覺化遊玩與分析工具。
+```
+                   ┌─────────────────────────────────────────────┐
+                   │       DQN-Based Pong Agent System            │
+                   └─────────────────────────────────────────────┘
+                                   │
+       ┌───────────────────────────┼────────────────────────────────────┐
+       │                           │                                    │
+┌───────────────────┐   ┌────────────────────────┐        ┌──────────────────────────┐
+│  Environment       │   │  Reinforcement Learning │        │   Opponent AI (2P)       │
+│ (env_paia.py)      │   │      (train_dqn.py)     │        │ (base / predictive / …)  │
+└───────────────────┘   └────────────────────────┘        └──────────────────────────┘
+       │                           │                                    │
+       ▼                           ▼                                    ▼
+- 球物理更新                - DQN 神經網路 (128-128 MLP)       - Simple-Follow AI
+- 球反彈與速度調整         - Target Network Sync              - Predictive 落點預測AI
+- 1P (Agent) 控制           - TD error 計算 & Hubor loss       - 隨球速調整追球速度
+- 2P (Rule-Based) AI       - Prioritized Replay Buffer        - Degree 可獨立調整
+- 障礙物（Hard mode）       - ε-greedy 探索                     - update(env) 方法
+- Reward Shaping           - 訓練記錄 (loss/Q/θ/reward curve)
+- State vector 提供給 DQN
 
+                 ┌──────────────────────────────────────────┐
+                 │  Visualization & Demo (play_paia_agent)  │
+                 └──────────────────────────────────────────┘
+                 - pygame 遊戲即時畫面
+                 - 顯示：反彈次數、reward、epsilon、球速
+                 - 左側資訊欄採等寬字體、左對齊
+                 - 可載入 .pt 模型
+
+                 ┌──────────────────────────────────────────┐
+                 │        Analysis Tools (analysis/)        │
+                 └──────────────────────────────────────────┘
+                 - analyze_miss_positions：收集 1P 掉球位置
+                 - plot_training_curves：產生 loss/Q/reward/θ 圖
+                 - 可讀取 .npy 進行熱力圖 & 失誤分布
+```
 ## 1. 遊戲環境（Environment Layer）
 
 - 主要檔案：`PAIA/env_paia.py`
@@ -220,13 +255,14 @@
 
 # to-do list
 - [X] 列出測試清單(單元測試以及整合測試)
-- [ ] 完成架構圖
-- [ ] 撰寫Readme
-- [ ] 補上breakdown
-- [ ] 補上上次簡報缺失的內容
+- [X] 完成架構圖
+- [X] 撰寫Readme
+- [X] 補上breakdown
+- [X] 補上上次簡報缺失的內容
 - [ ] DQN NN架構與內容
 - [ ] 補上loss function輪廓圖
 - [ ] Q learning 輸出說明
+
 
 
 
