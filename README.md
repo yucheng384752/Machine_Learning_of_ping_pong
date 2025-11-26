@@ -1,3 +1,127 @@
+# 專案架構總覽（Breakdown）
+
+本專案是一個「以 DQN 訓練 1P 乒乓球 AI，與 2P 規則型對手對戰」的完整系統，包含環境模擬、強化學習、對手 AI、視覺化遊玩與分析工具。
+
+## 1. 遊戲環境（Environment Layer）
+
+- 主要檔案：`PAIA/env_paia.py`
+- 職責：
+  - 建立乒乓球遊戲規則與物理：
+    - 球的座標、速度、反彈（上/下邊界、左右牆）
+    - 1P / 2P 板子位置與移動（每步 5px）
+    - 出界、得分、回合輪流發球
+  - 難度與模式：
+    - `mode="normal"`：基本對戰
+    - `mode="hard"`：加入障礙物（位置、大小、左右來回移動）
+  - Reward shaping：
+    - 時間步懲罰（鼓勵加快決策）
+    - 與球水平距離的懲罰（鼓勵慢慢對齊來球）
+    - 擊球成功、勝利與失敗的獎勵 / 懲罰
+    - 快速球額外加成（high-speed bonus）
+  - 狀態輸出（state vector）：
+    - 球位置 / 速度
+    - 1P / 2P 位置
+    - 反彈次數、是否在高速區間等
+
+
+## 2. 強化學習訓練（DQN Training Layer）
+
+- 主要檔案：`PAIA/train_dqn.py`
+- 職責：
+  - DQN 網路：
+    - 多層全連接 NN（輸入 state，輸出對每個 action 的 Q 值）
+    - 使用 PyTorch 實作，支援 GPU/CPU 自動切換
+  - 訓練流程：
+    - `env.reset() → (state, action, reward, next_state, done)` 反覆互動
+    - 記錄 transition 到 replay buffer
+    - 從 buffer 取樣 mini-batch，計算 TD target
+    - 以 loss function 更新 online network 參數 θ
+    - 週期性更新 target network
+  - 探索策略（ε-greedy）：
+    - 起始 ε = 1.0，隨訓練步數逐漸 decay 到 ε_min
+    - 控制貪心 vs 隨機探索比例
+  - Replay Buffer：
+    - 由 uniform sampling 更新為 Prioritized Replay（依 TD-error 給不同抽樣權重）
+    - 提高「關鍵錯誤情節」的學習效率
+  - 監控與輸出：
+    - 儲存 `reward_curve.npy`, `loss_curve.npy`, `avg_max_q.npy`, `theta_norm.npy`
+    - 定期儲存 `models/dqn_pong_best.pt`, `models/dqn_pong_last.pt`
+
+
+## 3. 對手 AI 模組（Opponent AI Layer）
+
+- 主要檔案：`PAIA/opponents/`
+  - `base.py`：共用介面與抽象類別
+  - `simple_follow.py`：單純追逐球的 x 位置
+  - `predictive.py`：預測球落點再移動
+- 職責：
+  - 2P 的行為邏輯（非學習型）：
+    - 根據球當前軌跡、速度進行追球
+    - 可透過 difficulty 調整速度與反應延遲
+  - 提供「固定但可調強度」的 sparring partner：
+    - easy / normal / hard 三種等級
+    - 用來測試 1P DQN 在不同對手下的穩定度
+
+
+## 4. 視覺化與遊玩介面（Play & Visualization Layer）
+
+- 主要檔案：`PAIA/play_paia_agent.py`
+- 職責：
+  - 載入訓練完成的 DQN 模型（`.pt` 檔）
+  - 建立與 `PongEnvPAIA` 的互動 loop：
+    - `state → model(action) → env.step(action)`
+  - 使用 `pygame` 顯示：
+    - 球、板子、障礙物
+    - 反彈次數
+    - 當前 reward
+    - win/lose 統計
+  - 視覺化 debug：
+    - 畫面放大（像素風格）
+    - UI 文字左對齊顯示，便於錄影與 demo
+
+
+## 5. 分析與統計工具（Analysis Layer）
+
+- 主要檔案：`analysis/`
+  - `analyze_miss_positions.py`：
+    - 重複載入模型與環境，自動遊玩多回合
+    - 蒐集掉球位置（Left / Middle / Right）分布
+    - 輸出統計結果與 `.npy` 檔案
+  - `plot_training_curves.py`：
+    - 讀取訓練過程產生的 `.npy` 檔
+    - 畫出：
+      - reward 曲線
+      - loss 曲線
+      - avg/max Q 曲線
+      - θ-norm 曲線
+- 職責：
+  - 幫助分析：
+    - 模型是否過度偏向某一側（例如右側漏球）
+    - 在高速球階段是否有明顯失誤集中區
+    - 訓練是否收斂或發散
+  - 支援報告與簡報使用：
+    - 直接產生可貼進投影片的圖
+
+
+## 6. 測試與專案管理（Testing & Management Layer）
+
+- 測試層級：
+  - 單元測試（Unit Test）：
+    - 環境 reset、ball update、paddle move、obstacle 行為
+    - DQN forward / loss / replay buffer
+    - opponent AI 反應與速度
+  - 整合測試（Integration Test）：
+    - env + DQN 跑 1000 steps 不 crash
+    - play_paia_agent 實際遊玩
+    - hard 模式下障礙物存在且會影響球路徑
+- 專案管理重點：
+  - 功能完成度：DQN 訓練 / 2P 模組化 / 視覺化 / hard-mode
+  - 效能指標：勝率、平均反彈次數、loss / Q 曲線
+  - 驗收條件：
+    - normal 模式對 simple-follow 有穩定優勢
+    - hard 模式可應付多次高速反彈
+    - lose position 有足夠樣本可分析
+
 # 專案管理
 - 功能清單：
   - DQN訓練
@@ -19,6 +143,7 @@
   - Lose position 至少收集到>50筆資料
   - 障礙物能正確迴避
   - 2P 兩個難度模式的速度都正確
+    
 # 系統分析
 - 遊戲環境
   - 檔案：env_paia.py
@@ -49,6 +174,7 @@
     - Pygame介面
     - 模型載入
     - Agent vs 2P 對戰顯示
+      
 # 環境設定
 - 難度與模式
 - <img width="871" height="163" alt="image" src="https://github.com/user-attachments/assets/a6222ba4-8524-49b9-8b61-a74faad2661e" />
@@ -65,6 +191,7 @@
     - Win：+1.5
     - Lose：-3 ~ -4(依照𝑑𝑥調整)
     - 可加成：快速擊球 bouns
+      
 # 測試清單
 - 單元測試
   - 環境測試
@@ -94,9 +221,13 @@
 # to-do list
 - [X] 列出測試清單(單元測試以及整合測試)
 - [ ] 完成架構圖
-- [ ] 撰寫Readme/PRD
+- [ ] 撰寫Readme
+- [ ] 補上breakdown
 - [ ] 補上上次簡報缺失的內容
 - [ ] DQN NN架構與內容
+- [ ] 補上loss function輪廓圖
+- [ ] Q learning 輸出說明
+
 
 
 
