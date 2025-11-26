@@ -259,9 +259,9 @@
 - [X] 撰寫Readme
 - [X] 補上breakdown
 - [X] 補上上次簡報缺失的內容
-- [ ] DQN NN架構與內容
-- [ ] 補上loss function輪廓圖
-- [ ] Q learning 輸出說明
+- [X] DQN NN架構與內容
+- [X] 補上loss function輪廓圖
+- [X] Q learning 輸出說明
 
 
 
