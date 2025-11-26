@@ -1,25 +1,102 @@
+# 專案管理
+- 功能清單：
+  - DQN訓練
+  - 2P AI 模組化
+  - Reward shaping
+  - Hard-mode 障礙物
+  - 視覺化展示
+- 效能指標：
+  - Reward_curve.npy：訓練成果
+  - Loss_curve.npy：模型穩定度
+  - Avg_max_q.npy：policy改善
+  - Theta_norm.npy：是否爆炸
+- 介面(pygame)：
+  - 原畫面放大2倍
+  - Debug 資訊顯示
+- 驗收： 
+  - Agent在easy模式擊敗simple-follow
+  - Agent在hard模式保持90%勝率
+  - Lose position 至少收集到>50筆資料
+  - 障礙物能正確迴避
+  - 2P 兩個難度模式的速度都正確
+# 系統分析
+- 遊戲環境
+  - 檔案：env_paia.py
+  - 包含：
+    - 球物理設定(反彈、速度、出局)
+    - 玩家移動(1P使用DQN，2P用AI)
+    - Hard模式障礙物設定
+    - Reward shaping
+    - State vector 最終輸出到DQN
+- 強化學習
+  - 檔案：train_dqn.py
+  - 包含：
+    - DQN network
+    - Replay buffer
+    - TD target 計算
+    - Target network 更新
+    - ϵ-greedy 探索
+    - 四個監控指標：reward curve、loss curve 、avg max Q、 θ-norm
+- 對手AI
+  - 檔案：opponents/
+  - 包含：
+    - Simple_follow(直線跟球)
+    - Predictive(預測球的落點)
+    - 速度與反應延遲由difficulty控制
+- 視覺化遊玩
+  - 檔案：play_paia_agent.py
+  - 包含：
+    - Pygame介面
+    - 模型載入
+    - Agent vs 2P 對戰顯示
 # 環境設定
-1. python <= 3.12
-2. uv
-3. torch(cpu or gpu version) = 2.5.1+cu121 <- cu121 for gpu version
-4. numpy = 2.3.3
-5. pygame = 2.6.1
-6. matplotlib = 3.10.7
-# 參數調整
-1. train_dqn.py -> def train -> env.mode (easy/hard)
-2. train_dqn.py -> def train -> device (cuda or cpu)
-
-# 使用者要求
-1. 發球(左/右)
-2. 在一般/高速情況下都可以穩定接球
-3. 在高速下預判球路
-4. 勝率達到九成以上
+- 難度與模式
+- <img width="871" height="163" alt="image" src="https://github.com/user-attachments/assets/a6222ba4-8524-49b9-8b61-a74faad2661e" />
+- DQN設定
+  - 𝛾 = 0.99
+  - Buffer = 50k
+  - Batch size = 64
+  - Target update = 1000 steps
+  - Epsilon: 1 → 0.05(5000 decay steps)
+- Reward 設計
+    - 時間步：-0.01
+    - 跟球對齊：-0.02*𝑑𝑥
+    - 擊球成功：小幅正 reward
+    - Win：+1.5
+    - Lose：-3 ~ -4(依照𝑑𝑥調整)
+    - 可加成：快速擊球 bouns
+# 測試清單
+- 單元測試
+  - 環境測試
+    - Test_reset：確保環境初始化
+    - Test_update_ball：人工指定球的位置與速度，測試球的碰撞、邊界、出局
+    - Test_update_player1：測試player的發球與動作
+    - Test_update_player2：確認2P AI速度變化
+    - Test_state_feature：確保state維度與數值範圍正確
+    - Test_obstacle：hard 模式下，障礙物的位置、移動、碰撞
+  - DQN模型測試
+    - Test_dqn_forward：測試丟入隨機state，輸出的shape是否正確
+    - Test_replay_buffer：push+sample，檢查shape是否正確
+    - Test_loss_target_calc：手動產生batch，檢查TD target是否正確
+    - Test_epsilon_schedule：測試epsilon是否從1 => 0.05線性下降
+    - Test_parameter_update：測試單步backward，確認θ-norm變化
+  - 2P對手測試
+    - Test_opponent_update：呼叫update(env)，觀察P2是否向球靠近
+    - Test_opponent_speed：在 easy/normal/hard要有三種速度
+    - Test_predictive_ai：測試預測球落點是否正確
+- 整合測試
+  - Test_episode_run：env.reset → 500steps → 確保不會crash
+  - Test_train_100_steps：執行100 steps DQN，𝜃 會更新
+  - Test_play_agent：使用play_paia_agent實際跑一分鐘
+  - Test_hard_mode_with_obstacle：hard模式下，障礙物存在且會阻擋球
+  - Test_loss_position_analysis：測試analyze_miss_position能夠蒐集lose資料
 
 # to-do list
 - [X] 列出測試清單(單元測試以及整合測試)
-- [X] 完成架構圖
+- [ ] 完成架構圖
 - [ ] 撰寫Readme/PRD
 - [ ] 補上上次簡報缺失的內容
 - [ ] DQN NN架構與內容
+
 
 
