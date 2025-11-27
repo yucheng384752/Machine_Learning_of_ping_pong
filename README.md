@@ -263,7 +263,8 @@
 - [X] 補上loss function輪廓圖
 - [X] Q learning 輸出說明
 
-
+# 網頁連結
+- https://app.paia-arena.com/zh/game/3
 
 
 
